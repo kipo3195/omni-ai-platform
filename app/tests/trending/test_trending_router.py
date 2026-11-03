@@ -1,10 +1,7 @@
+from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
-from app.features.trending import trending_router
-from app.main import app
-
-
-client = TestClient(app)
+from app.features.trending.trending_router import create_trending_router
 
 
 class FakeTrendingService:
@@ -12,12 +9,13 @@ class FakeTrendingService:
         return 2
 
 
-def test_refresh_trending_context(monkeypatch):
-    monkeypatch.setattr(
-        trending_router,
-        "trending_service",
-        FakeTrendingService(),
+def test_refresh_trending_context():
+    app = FastAPI()
+    app.include_router(
+        create_trending_router(FakeTrendingService()),
+        prefix="/ai/v1",
     )
+    client = TestClient(app)
 
     response = client.post("/ai/v1/trending/refresh")
 

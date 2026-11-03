@@ -16,12 +16,11 @@ from app.features.conversation_start.nodes.load_trending_context import (
     create_load_trending_context_node,
 )
 
-from app.features.trending.trending_service import TrendingService
-
 from app.features.conversation_start.nodes.analyze_recent_context import (
     analyze_recent_context
 )
 
+from app.features.conversation_start.ports import TrendingContextProvider
 from app.features.conversation_start.conversation_start_schemas import SuggestionType
 from app.features.conversation_start.conversation_start_state import ConversationStartState
 
@@ -36,7 +35,7 @@ def route_suggestion(
     return "trending"
 
 def create_conversation_start_graph(
-    trending_service: TrendingService,
+    trending_context_provider: TrendingContextProvider,
 ):
     
     # 변경할 state, 운반할 데이터 규격
@@ -62,7 +61,7 @@ def create_conversation_start_graph(
 
     builder.add_node(
         "load_trending_context",
-        create_load_trending_context_node(trending_service),
+        create_load_trending_context_node(trending_context_provider),
     )
 
     builder.add_node(

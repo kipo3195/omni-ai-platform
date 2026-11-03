@@ -1,4 +1,5 @@
 from datetime import datetime
+from enum import Enum
 from typing import Literal
 
 from pydantic import Field, model_validator
@@ -43,17 +44,44 @@ class ReturnedMessageTopicsRequest(AiTaskRequest[ReturnedMessageTopicsInput]):
     contract_version: Literal[1]
 
 
+class ReturnedMessagePriority(str, Enum):
+    LOW = "LOW"
+    NORMAL = "NORMAL"
+    HIGH = "HIGH"
+    URGENT = "URGENT"
+    UNKNOWN = "UNKNOWN"
+
+
 class ReturnedMessageTopic(ContractModel):
     topic: str = Field(min_length=1)
     summary: str = Field(min_length=1)
-    priority: Literal["LOW", "NORMAL", "HIGH", "URGENT"]
-    priority_reason: str | None = None
+    priority: ReturnedMessagePriority
+    priority_reason: str = Field(min_length=1, max_length=50)
+    reply_required: bool
+    reply_reason: str = Field(min_length=1, max_length=50)
+    action_required: bool
+    action_reason: str = Field(min_length=1, max_length=50)
     message_count: int = Field(ge=1)
     source_message_refs: list[str] = Field(min_length=1)
 
+    @model_validator(mode="after")
+    def validate_source_message_refs(self) -> "ReturnedMessageTopic":
+        unique_refs = set(self.source_message_refs)
+        if len(unique_refs) != len(self.source_message_refs):
+            raise ValueError("source_message_refs values must be unique")
+        if self.message_count != len(unique_refs):
+            raise ValueError(
+                "message_count must match the number of source_message_refs"
+            )
+        return self
+
+
+class ReturnedMessageTopicsAnalysis(ContractModel):
+    topics: list[ReturnedMessageTopic] = Field(min_length=1)
+
 
 class ReturnedMessageTopicsResult(ContractModel):
-    topics: list[ReturnedMessageTopic]
+    topics: list[ReturnedMessageTopic] = Field(min_length=1)
     generated_at: datetime
 
 

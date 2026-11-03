@@ -1,68 +1,50 @@
+from fastapi import FastAPI
+
+from app.api.v1.router import create_api_v1_router
 from app.core.config import settings
-from app.features.trending.trending_repository import TrendingRepository
-from app.features.trending.trending_service import TrendingService
-from app.features.trending.providers.google_trends_provider import GoogleTrendingProvider
-from app.features.trending.evaluators.llm_topic_evaluator import LlmTopicEvaluator
-from app.features.trending.enrichers.google_news_context_enricher import GoogleNewsContextEnricher
-from app.features.trending.policies.trending_topic_selection_policy import TrendingTopicSelectionPolicy
-from app.features.trending.evaluators.llm_news_context_evaluator import LlmNewsContextEvaluator
-from app.features.trending.generators.llm_base_question_generator import (
-    LlmTrendingBaseQuestionGenerator,
+from app.core.logging_config import setup_logging
+from app.features.conversation_start.composition import (
+    create_conversation_start_runner,
 )
-from app.features.trending.policies.news_context_selection_policy import NewsContextSelectionPolicy
+from app.features.returned_message_topics.composition import (
+    create_returned_message_topics_handler,
+)
+from app.features.trending.composition import create_trending_service
 from app.shared.llm.factory import create_llm_client
-from app.features.conversation_start.conversation_start_graph import (
-    create_conversation_start_graph,
-)
 
-# LLM Client 생성
-llm_client = create_llm_client(settings)
 
-# repository
-trending_repository = TrendingRepository()
+def create_app() -> FastAPI:
+    setup_logging()
 
-# provider
-trending_provider = GoogleTrendingProvider(
-    limit=20,
-)
+    llm_client = create_llm_client(settings)
 
-# trending evaluator
-topic_evaluator = LlmTopicEvaluator(
-    llm_client=llm_client,
-)
+    trending_service = create_trending_service(
+        llm_client=llm_client,
+    )
 
-# Google News enricher
-context_enricher = GoogleNewsContextEnricher()
+    conversation_start_runner = create_conversation_start_runner(
+        trending_context_provider=trending_service,
+    )
+    returned_message_topics_handler = create_returned_message_topics_handler(
+        llm_client=llm_client,
+    )
 
-# topic select policy
-topic_select_policy = TrendingTopicSelectionPolicy()
+    app = FastAPI(
+        title="Omni AI Platform",
+    )
 
-# news context evaluator
-news_context_evaluator = LlmNewsContextEvaluator(
-    llm_client=llm_client,
-)
+    app.include_router(
+        create_api_v1_router(
+            conversation_start_runner=conversation_start_runner,
+            returned_message_topics_handler=returned_message_topics_handler,
+            trending_refresher=trending_service,
+        )
+    )
 
-# news context selection policy
-news_context_selection_policy = NewsContextSelectionPolicy()
+    @app.get("/health")
+    async def health():
+        return {
+            "status": "ok"
+        }
 
-# base question generator
-base_question_generator = LlmTrendingBaseQuestionGenerator(
-    llm_client=llm_client,
-    batch_size=5,
-)
-
-# service
-trending_service = TrendingService(
-    repository=trending_repository,
-    provider=trending_provider,
-    evaluator=topic_evaluator,
-    context_enricher=context_enricher,
-    policy=topic_select_policy,
-    news_context_evaluator=news_context_evaluator,
-    news_context_selection_policy=news_context_selection_policy,
-    base_question_generator=base_question_generator,
-)
-
-conversation_start_graph = create_conversation_start_graph(
-    trending_service=trending_service,
-)
+    return app

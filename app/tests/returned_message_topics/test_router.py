@@ -1,11 +1,16 @@
 from copy import deepcopy
+from datetime import datetime, timezone
 
+from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
-from app.main import app
-
-
-client = TestClient(app)
+from app.features.returned_message_topics.returned_message_topics_router import (
+    create_returned_message_topics_router,
+)
+from app.features.returned_message_topics.returned_message_topics_schemas import (
+    ReturnedMessageTopic,
+    ReturnedMessageTopicsResult,
+)
 
 
 VALID_REQUEST = {
@@ -29,8 +34,40 @@ VALID_REQUEST = {
 }
 
 
+class FakeReturnedMessageTopicsHandler:
+    async def execute(self, execution_id, tenant_id, task_input):
+        return ReturnedMessageTopicsResult(
+            topics=[
+                ReturnedMessageTopic(
+                    topic="업무 보고",
+                    summary="업무 보고 관련 쪽지입니다.",
+                    priority="UNKNOWN",
+                    priority_reason="제목만으로 우선순위를 판단하기 어렵습니다.",
+                    reply_required=False,
+                    reply_reason="명시적인 답변 요청이 없습니다.",
+                    action_required=False,
+                    action_reason="명시적인 후속 조치 요청이 없습니다.",
+                    message_count=1,
+                    source_message_refs=["MSG_KEY_1"],
+                )
+            ],
+            generated_at=datetime(2026, 11, 2, tzinfo=timezone.utc),
+        )
+
+
+def create_client() -> TestClient:
+    app = FastAPI()
+    app.include_router(
+        create_returned_message_topics_router(
+            FakeReturnedMessageTopicsHandler()
+        ),
+        prefix="/ai/v1",
+    )
+    return TestClient(app)
+
+
 def test_generate_returned_message_topics_accepts_valid_request():
-    response = client.post(
+    response = create_client().post(
         "/ai/v1/returned-message-topics/generate",
         json=VALID_REQUEST,
     )
@@ -44,63 +81,58 @@ def test_generate_returned_message_topics_accepts_valid_request():
     assert body["result"]["topics"] == [
         {
             "topic": "업무 보고",
-            "summary": "선택된 쪽지의 Topic 생성을 위한 고정 응답입니다.",
-            "priority": "NORMAL",
-            "priority_reason": None,
+            "summary": "업무 보고 관련 쪽지입니다.",
+            "priority": "UNKNOWN",
+            "priority_reason": "제목만으로 우선순위를 판단하기 어렵습니다.",
+            "reply_required": False,
+            "reply_reason": "명시적인 답변 요청이 없습니다.",
+            "action_required": False,
+            "action_reason": "명시적인 후속 조치 요청이 없습니다.",
             "message_count": 1,
             "source_message_refs": ["MSG_KEY_1"],
         }
     ]
-    assert body["result"]["generated_at"]
+    assert body["result"]["generated_at"] == "2026-11-02T00:00:00Z"
 
 
 def test_generate_returned_message_topics_rejects_unknown_task_type():
     request = deepcopy(VALID_REQUEST)
     request["task_type"] = "CONVERSATION_START"
-
-    response = client.post(
+    response = create_client().post(
         "/ai/v1/returned-message-topics/generate",
         json=request,
     )
-
     assert response.status_code == 422
 
 
 def test_generate_returned_message_topics_rejects_unsupported_contract_version():
     request = deepcopy(VALID_REQUEST)
     request["contract_version"] = 2
-
-    response = client.post(
+    response = create_client().post(
         "/ai/v1/returned-message-topics/generate",
         json=request,
     )
-
     assert response.status_code == 422
 
 
 def test_generate_returned_message_topics_requires_selected_items():
     request = deepcopy(VALID_REQUEST)
     request["input"]["selected_items"] = []
-
-    response = client.post(
+    response = create_client().post(
         "/ai/v1/returned-message-topics/generate",
         json=request,
     )
-
     assert response.status_code == 422
 
 
 def test_generate_returned_message_topics_allows_nullable_subject():
     request = deepcopy(VALID_REQUEST)
     request["input"]["selected_items"][0]["subject"] = None
-
-    response = client.post(
+    response = create_client().post(
         "/ai/v1/returned-message-topics/generate",
         json=request,
     )
-
     assert response.status_code == 200
-    assert response.json()["result"]["topics"][0]["topic"] == "제목 없음"
 
 
 def test_generate_returned_message_topics_rejects_duplicate_source_keys():
@@ -112,12 +144,10 @@ def test_generate_returned_message_topics_rejects_duplicate_source_keys():
             "sequence": 1,
         }
     )
-
-    response = client.post(
+    response = create_client().post(
         "/ai/v1/returned-message-topics/generate",
         json=request,
     )
-
     assert response.status_code == 422
 
 
@@ -130,10 +160,8 @@ def test_generate_returned_message_topics_rejects_duplicate_sequences():
             "sequence": 0,
         }
     )
-
-    response = client.post(
+    response = create_client().post(
         "/ai/v1/returned-message-topics/generate",
         json=request,
     )
-
     assert response.status_code == 422

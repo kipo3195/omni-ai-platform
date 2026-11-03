@@ -15,6 +15,7 @@ class AiTaskExecutor(Generic[InputT, ResultT]):
         request: AiTaskRequest[InputT],
         handler: AiTaskHandler[InputT, ResultT],
     ) -> AiTaskSuccessResponse[ResultT]:
+        # handler의 execute 실행시 처리할 규격
         result = await handler.execute(
             execution_id=request.execution_id,
             tenant_id=request.tenant_id,

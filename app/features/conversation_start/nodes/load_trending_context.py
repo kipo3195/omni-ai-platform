@@ -1,15 +1,16 @@
-from app.features.trending.trending_service import TrendingService
+from app.features.conversation_start.ports import TrendingContextProvider
 from app.features.conversation_start.conversation_start_state import ConversationStartState
 
+
 def create_load_trending_context_node(
-    trending_service: TrendingService,
+    context_provider: TrendingContextProvider,
 ):
 
     async def load_trending_context(
         state: ConversationStartState,
     ) -> dict:
 
-        topics = await trending_service.get_context(
+        topics = await context_provider.get_context(
             limit=10,
         )
 

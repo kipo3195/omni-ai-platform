@@ -45,7 +45,7 @@ class TrendingService:
         self,
         limit: int = 10,
         exclude_topics: list[str] | None = None,
-    ):
+    ) -> list[EvaluatedTrendingTopic]:
         exclude_topics = exclude_topics or []
 
         topics = await self.repository.find_all()

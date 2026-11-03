@@ -1,12 +1,38 @@
+from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
-from app.main import app
+from app.features.conversation_start.conversation_start_router import (
+    create_conversation_start_router,
+)
 
 
-client = TestClient(app)
+class FakeConversationStartRunner:
+
+    async def ainvoke(self, input):
+        return {
+            "selected_messages": [
+                {
+                    "topic": "배포 일정",
+                    "question": "배포 일정 관련해서 진행 상황은 어떠세요?",
+                },
+                {
+                    "topic": "배포 일정",
+                    "question": "배포 일정 관련해서 추가로 확인할 내용 있을까요?",
+                },
+            ]
+        }
 
 
 def test_chat_suggestions_generate_recent_context():
+    app = FastAPI()
+    app.include_router(
+        create_conversation_start_router(
+            FakeConversationStartRunner(),
+        ),
+        prefix="/ai/v1",
+    )
+    client = TestClient(app)
+
     response = client.post(
         "/ai/v1/chat/suggestions/generate",
         json={
