@@ -24,9 +24,14 @@ _load_dotenv()
 
 @dataclass(frozen=True)
 class Settings:
+    app_env: str = os.getenv("APP_ENV", "development")
     llm_provider: str = os.getenv("LLM_PROVIDER", "groq")
     groq_api_key: str = os.getenv("GROQ_API_KEY", "")
     groq_model: str = os.getenv("GROQ_MODEL", "openai/gpt-oss-120b")
+
+    @property
+    def is_development(self) -> bool:
+        return self.app_env.strip().lower() in {"dev", "development", "local"}
 
 
 settings = Settings()

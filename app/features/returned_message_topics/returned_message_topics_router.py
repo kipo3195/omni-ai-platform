@@ -11,6 +11,7 @@ from app.features.returned_message_topics.returned_message_topics_schemas import
     ReturnedMessageTopicsSuccessResponse,
 )
 from app.features.returned_message_topics.trace import (
+    trace_development,
     trace_exception,
     trace_info,
 )
@@ -67,6 +68,12 @@ def create_returned_message_topics_router(
             execution_id=request.execution_id,
             request_id=request.input.request_id,
             topic_count=len(success_response.result.topics),
+        )
+        trace_development(
+            "http_response_payload",
+            execution_id=request.execution_id,
+            request_id=request.input.request_id,
+            response=success_response.model_dump(mode="json"),
         )
         return success_response
 

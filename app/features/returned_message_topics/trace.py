@@ -1,5 +1,7 @@
 import logging
 
+from app.core.config import settings
+
 
 # Temporary feature trace (RMT_TRACE): remove this module and its imports/calls
 # when tracing is no longer needed.
@@ -9,6 +11,13 @@ logger = logging.getLogger("app.features.returned_message_topics.trace")
 
 def trace_info(event: str, **fields: object) -> None:
     logger.info("%s event=%s%s", TRACE_MARKER, event, _format_fields(fields))
+
+
+def trace_development(event: str, **fields: object) -> None:
+    """Log content-bearing diagnostics only in a development environment."""
+    if not settings.is_development:
+        return
+    trace_info(event, **fields)
 
 
 def trace_exception(event: str, **fields: object) -> None:

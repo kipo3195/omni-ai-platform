@@ -10,3 +10,7 @@ docker run \
   --env-file .env \
   -p 8000:8000 \
   omni-ai-platform:latest
+
+# 개발환경의 Returned Message Topics prompt/결과 payload 로그 활성화
+# prompt에 메시지 제목이 포함되므로 운영환경에서는 반드시 production으로 설정한다.
+APP_ENV=development

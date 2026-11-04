@@ -11,6 +11,7 @@ from app.features.returned_message_topics.returned_message_topics_state import (
     ReturnedMessageTopicsState,
 )
 from app.features.returned_message_topics.trace import (
+    trace_development,
     trace_exception,
     trace_info,
 )
@@ -50,32 +51,59 @@ def create_analyze_message_node(llm_client: LlmClient):
             ensure_ascii=False,
         )
 
+        llm_request = LlmRequest(
+            messages=[
+                LlmMessage(role="system", content=SYSTEM_PROMPT),
+                LlmMessage(role="user", content=user_payload),
+            ],
+            temperature=0.1,
+            response_format={
+                "type": "json_schema",
+                "json_schema": {
+                    "name": "returned_message_topics_analysis",
+                    "strict": True,
+                    "schema": ReturnedMessageTopicsAnalysis.model_json_schema(),
+                },
+            },
+            max_tokens=4000,
+        )
+        trace_development(
+            "llm_prompt_payload",
+            execution_id=state.execution_id,
+            max_tokens=llm_request.max_tokens,
+            messages=[
+                {
+                    "role": message.role,
+                    "content": message.content,
+                }
+                for message in llm_request.messages
+            ],
+            request_id=state.task_input.request_id,
+            response_format=llm_request.response_format,
+            temperature=llm_request.temperature,
+        )
+
         try:
-            response = await llm_client.generate(
-                LlmRequest(
-                    messages=[
-                        LlmMessage(role="system", content=SYSTEM_PROMPT),
-                        LlmMessage(role="user", content=user_payload),
-                    ],
-                    temperature=0.1,
-                    response_format={
-                        "type": "json_schema",
-                        "json_schema": {
-                            "name": "returned_message_topics_analysis",
-                            "strict": True,
-                            "schema": (
-                                ReturnedMessageTopicsAnalysis.model_json_schema()
-                            ),
-                        },
-                    },
-                    max_tokens=4000,
-                )
+            response = await llm_client.generate(llm_request)
+            trace_development(
+                "llm_raw_response_payload",
+                content=response.content,
+                execution_id=state.execution_id,
+                model=response.model,
+                request_id=state.task_input.request_id,
+                usage=response.usage,
             )
 
             analysis = ReturnedMessageTopicsAnalysis.model_validate_json(
                 response.content
             )
             _validate_source_references(analysis, source_refs)
+            trace_development(
+                "llm_validated_result_payload",
+                execution_id=state.execution_id,
+                request_id=state.task_input.request_id,
+                result=analysis.model_dump(mode="json"),
+            )
         except Exception as exc:
             trace_exception(
                 "llm_analysis_failed",
