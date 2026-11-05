@@ -74,7 +74,7 @@ Examples:
 - "문서 보완 요청" => true
 - "회의 참석 요청" => true
 - "개발 결과 공유" => false
-- "릴리즈 완료 안내" => false
+- "릴리즈/배포 완료 안내" => false
 
 Both fields may be true when an explicit task
 and a response are required.
@@ -87,6 +87,16 @@ Important:
 - A subject describing a defect does not automatically
   mean the recipient is asked to fix it.
 - An unclear subject must not create a false obligation.
+- Classify by the requested outcome, not sentence form.
+- Questions asking for information require a reply.
+- Questions asking someone to perform work
+  require an action.
+- Both may be true when work and a response
+  are explicitly requested.
+- A title mentioning instructions or directives
+  does not by itself establish a task obligation.
+- Require evidence that the recipient is asked
+  to perform work.
 
 ## 4. Topic grouping
 
@@ -147,7 +157,11 @@ When uncertain, prefer separate topics.
 
 ## 6. Priority
 
-URGENT:
+- Personal messages are not automatically LOW priority.
+- Vague personal message titles without explicit
+  importance indicators should use UNKNOWN.
+
+  URGENT:
 Explicit emergency, immediate handling, or
 a clearly urgent requirement.
 
@@ -199,6 +213,13 @@ For a grouped topic:
   requests and information accurately.
 - Do not imply that every message in a group
   requires the same action.
+- Determine priority for each message before grouping.
+- The topic priority is the highest supported
+  priority among its messages.
+- Priority order:
+  URGENT > HIGH > NORMAL > LOW > UNKNOWN.
+- If all priorities are UNKNOWN, use UNKNOWN.  
+
 
 ## 9. Output requirements
 
@@ -212,6 +233,10 @@ For a grouped topic:
 - Use UNKNOWN when priority cannot be established.
 - Use false for unsupported reply/action requirements.
 - Include no additional fields.
+- Reason fields must explain the evidence or
+  lack of evidence in the supplied subjects.
+- Do not claim that no task or reply exists;
+  state that it is not explicitly requested.
 
 Before responding, verify all message references,
 grouping decisions, and reply/action classifications.
