@@ -6,6 +6,9 @@ from pydantic import Field, model_validator
 
 from app.features.ai_task.ai_task_schemas import (
     AiTaskRequest,
+    AiTaskAcceptedResponse,
+    AiTaskError,
+    AiTaskFailureResponse,
     AiTaskSuccessResponse,
     ContractModel,
 )
@@ -39,9 +42,25 @@ class ReturnedMessageTopicsInput(ContractModel):
         return self
 
 
+# java의 이 형태와 동일함.
+# class ReturnedMessageTopicsRequest
+#     extends AiTaskRequest<ReturnedMessageTopicsInput> {
+# }
 class ReturnedMessageTopicsRequest(AiTaskRequest[ReturnedMessageTopicsInput]):
     task_type: Literal["RETURNED_MESSAGE_TOPICS"]
-    contract_version: Literal[1]
+    contract_version: Literal[2]
+
+
+class ReturnedMessageTopicsAcceptedResponse(AiTaskAcceptedResponse):
+    task_type: Literal["RETURNED_MESSAGE_TOPICS"]
+    contract_version: Literal[2]
+
+
+class ReturnedMessageTopicsRunningResponse(ContractModel):
+    execution_id: str = Field(min_length=1)
+    task_type: Literal["RETURNED_MESSAGE_TOPICS"]
+    contract_version: Literal[2]
+    status: Literal["RUNNING"] = "RUNNING"
 
 
 class ReturnedMessagePriority(str, Enum):
@@ -55,13 +74,6 @@ class ReturnedMessagePriority(str, Enum):
 class ReturnedMessageTopic(ContractModel):
     topic: str = Field(min_length=1)
     summary: str = Field(min_length=1)
-    priority: ReturnedMessagePriority
-    priority_reason: str = Field(min_length=1, max_length=50)
-    reply_required: bool
-    reply_reason: str = Field(min_length=1, max_length=50)
-    action_required: bool
-    action_reason: str = Field(min_length=1, max_length=50)
-    message_count: int = Field(ge=1)
     source_message_refs: list[str] = Field(min_length=1)
 
     @model_validator(mode="after")
@@ -69,19 +81,27 @@ class ReturnedMessageTopic(ContractModel):
         unique_refs = set(self.source_message_refs)
         if len(unique_refs) != len(self.source_message_refs):
             raise ValueError("source_message_refs values must be unique")
-        if self.message_count != len(unique_refs):
-            raise ValueError(
-                "message_count must match the number of source_message_refs"
-            )
         return self
+
+
+class ReturnedMessageAssessment(ContractModel):
+    message_ref: str = Field(min_length=1)
+    priority: ReturnedMessagePriority
+    priority_reason: str = Field(min_length=1, max_length=50)
+    reply_required: bool
+    reply_reason: str = Field(min_length=1, max_length=50)
+    action_required: bool
+    action_reason: str = Field(min_length=1, max_length=50)
 
 
 class ReturnedMessageTopicsAnalysis(ContractModel):
     topics: list[ReturnedMessageTopic] = Field(min_length=1)
+    message_assessments: list[ReturnedMessageAssessment] = Field(min_length=1)
 
 
 class ReturnedMessageTopicsResult(ContractModel):
     topics: list[ReturnedMessageTopic] = Field(min_length=1)
+    message_assessments: list[ReturnedMessageAssessment] = Field(min_length=1)
     generated_at: datetime
 
 
@@ -89,4 +109,26 @@ class ReturnedMessageTopicsSuccessResponse(
     AiTaskSuccessResponse[ReturnedMessageTopicsResult]
 ):
     task_type: Literal["RETURNED_MESSAGE_TOPICS"]
-    contract_version: Literal[1]
+    contract_version: Literal[2]
+
+
+class ReturnedMessageTopicsFailureResponse(AiTaskFailureResponse):
+    task_type: Literal["RETURNED_MESSAGE_TOPICS"]
+    contract_version: Literal[2]
+    error: AiTaskError
+
+
+class ReturnedMessageTopicsCancelledResponse(ContractModel):
+    execution_id: str = Field(min_length=1)
+    task_type: Literal["RETURNED_MESSAGE_TOPICS"]
+    contract_version: Literal[2]
+    status: Literal["CANCELLED"] = "CANCELLED"
+
+
+ReturnedMessageTopicsExecutionResponse = (
+    ReturnedMessageTopicsAcceptedResponse
+    | ReturnedMessageTopicsRunningResponse
+    | ReturnedMessageTopicsSuccessResponse
+    | ReturnedMessageTopicsFailureResponse
+    | ReturnedMessageTopicsCancelledResponse
+)

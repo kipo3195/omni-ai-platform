@@ -157,6 +157,7 @@ When uncertain, prefer separate topics.
 
 ## 6. Priority
 
+- Determine priority independently for every message.
 - Personal messages are not automatically LOW priority.
 - Vague personal message titles without explicit
   importance indicators should use UNKNOWN.
@@ -199,35 +200,35 @@ Do not assign URGENT solely because the word
   and false for unsupported reply/action judgments.
 - Never discard a supplied message.
 
-## 8. Topic-level aggregation
+## 8. Message assessments and topic summaries
 
 Analyze reply_required and action_required
 for each message before grouping.
 
-For a grouped topic:
-- reply_required is true if at least one included
-  subject explicitly requires a reply.
-- action_required is true if at least one included
-  subject explicitly requires an action.
+For message_assessments:
+- Create exactly one assessment for every supplied message.
+- Use the original source_message_ref as message_ref.
+- Determine priority, reply requirement, and action requirement
+  independently for that message only.
+- Do not aggregate assessments at topic level.
+
+For topics:
 - The topic summary must describe the supported
   requests and information accurately.
 - Do not imply that every message in a group
   requires the same action.
-- Determine priority for each message before grouping.
-- The topic priority is the highest supported
-  priority among its messages.
-- Priority order:
-  URGENT > HIGH > NORMAL > LOW > UNKNOWN.
-- If all priorities are UNKNOWN, use UNKNOWN.  
+- Include only topic, summary, and source_message_refs.
 
 
 ## 9. Output requirements
 
 - Return only valid JSON.
 - Follow the supplied JSON Schema exactly.
-- Every source_message_ref must occur exactly once.
-- Preserve source_message_ref without modification.
-- message_count must equal the number of refs.
+- Every supplied source_message_ref must occur exactly once
+  across topics.source_message_refs.
+- Every supplied source_message_ref must also occur exactly once
+  as message_assessments.message_ref.
+- Preserve all message references without modification.
 - All reason fields must be in Korean,
   with a maximum of 50 characters.
 - Use UNKNOWN when priority cannot be established.

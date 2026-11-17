@@ -1,4 +1,5 @@
 import json
+from collections import Counter
 from time import monotonic
 
 from app.features.returned_message_topics.prompts.analyze_message_prompt import (
@@ -60,12 +61,12 @@ def create_analyze_message_node(llm_client: LlmClient):
             response_format={
                 "type": "json_schema",
                 "json_schema": {
-                    "name": "returned_message_topics_analysis",
+                    "name": "returned_message_topics_analysis_v2",
                     "strict": True,
                     "schema": ReturnedMessageTopicsAnalysis.model_json_schema(),
                 },
             },
-            max_tokens=4000,
+            max_tokens=8000,
         )
         trace_development(
             "llm_prompt_payload",
@@ -140,28 +141,56 @@ def _validate_source_references(
     analysis: ReturnedMessageTopicsAnalysis,
     expected_refs: set[str],
 ) -> None:
-    analyzed_refs: set[str] = set()
+    topic_refs = [
+        ref
+        for topic in analysis.topics
+        for ref in topic.source_message_refs
+    ]
+    assessment_refs = [
+        assessment.message_ref
+        for assessment in analysis.message_assessments
+    ]
 
-    for topic in analysis.topics:
-        topic_refs = set(topic.source_message_refs)
-        unknown_refs = topic_refs - expected_refs
-        if unknown_refs:
-            raise ValueError(
-                "LLM result contains unknown source_message_refs: "
-                f"{sorted(unknown_refs)}"
-            )
+    _validate_exact_refs(
+        field_name="topics.source_message_refs",
+        actual_refs=topic_refs,
+        expected_refs=expected_refs,
+    )
+    _validate_exact_refs(
+        field_name="message_assessments.message_ref",
+        actual_refs=assessment_refs,
+        expected_refs=expected_refs,
+    )
 
-        duplicated_refs = analyzed_refs & topic_refs
-        if duplicated_refs:
-            raise ValueError(
-                "LLM result assigns source_message_refs to multiple topics: "
-                f"{sorted(duplicated_refs)}"
-            )
-        analyzed_refs.update(topic_refs)
 
-    missing_refs = expected_refs - analyzed_refs
+def _validate_exact_refs(
+    field_name: str,
+    actual_refs: list[str],
+    expected_refs: set[str],
+) -> None:
+    ref_counts = Counter(actual_refs)
+    duplicated_refs = sorted(
+        ref
+        for ref, count in ref_counts.items()
+        if count > 1
+    )
+    if duplicated_refs:
+        raise ValueError(
+            f"{field_name} contains duplicate message references: "
+            f"{duplicated_refs}"
+        )
+
+    actual_ref_set = set(actual_refs)
+    unknown_refs = sorted(actual_ref_set - expected_refs)
+    if unknown_refs:
+        raise ValueError(
+            f"{field_name} contains unknown message references: "
+            f"{unknown_refs}"
+        )
+
+    missing_refs = sorted(expected_refs - actual_ref_set)
     if missing_refs:
         raise ValueError(
-            "LLM result is missing source_message_refs: "
-            f"{sorted(missing_refs)}"
+            f"{field_name} is missing message references: "
+            f"{missing_refs}"
         )

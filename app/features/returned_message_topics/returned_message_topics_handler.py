@@ -54,5 +54,6 @@ class ReturnedMessageTopicsHandler:
 
         return ReturnedMessageTopicsResult(
             topics=analysis.topics,
+            message_assessments=analysis.message_assessments,
             generated_at=datetime.now(timezone.utc),
         )

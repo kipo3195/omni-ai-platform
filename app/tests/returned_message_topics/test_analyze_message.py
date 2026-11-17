@@ -8,6 +8,7 @@ from app.features.returned_message_topics.nodes.analyze_message import (
     create_analyze_message_node,
 )
 from app.features.returned_message_topics.returned_message_topics_schemas import (
+    ReturnedMessageAssessment,
     ReturnedMessageSelectedItem,
     ReturnedMessageTopic,
     ReturnedMessageTopicsInput,
@@ -62,16 +63,29 @@ def valid_analysis() -> dict:
             {
                 "topic": "배포 일정",
                 "summary": "배포 일정 확인과 회신이 필요합니다.",
-                "priority": "UNKNOWN",
-                "priority_reason": "제목에 긴급도나 기한이 드러나지 않습니다.",
-                "reply_required": True,
-                "reply_reason": "회신 요청이 제목에 명시되어 있습니다.",
-                "action_required": True,
-                "action_reason": "배포 일정 확인 요청이 포함되어 있습니다.",
-                "message_count": 2,
                 "source_message_refs": ["message-1", "message-2"],
             }
-        ]
+        ],
+        "message_assessments": [
+            {
+                "message_ref": "message-1",
+                "priority": "NORMAL",
+                "priority_reason": "일반적인 배포 일정 회신 요청입니다.",
+                "reply_required": True,
+                "reply_reason": "회신 요청이 명시되어 있습니다.",
+                "action_required": False,
+                "action_reason": "명시적인 작업 요청이 없습니다.",
+            },
+            {
+                "message_ref": "message-2",
+                "priority": "NORMAL",
+                "priority_reason": "일반적인 배포 일정 확인 요청입니다.",
+                "reply_required": False,
+                "reply_reason": "명시적인 회신 요청이 없습니다.",
+                "action_required": True,
+                "action_reason": "배포 일정 확인을 요청했습니다.",
+            },
+        ],
     }
 
 
@@ -83,8 +97,13 @@ def test_analyze_message_calls_llm_once_with_strict_structured_output():
     assert len(llm_client.requests) == 1
     request = llm_client.requests[0]
     assert request.temperature == 0.1
+    assert request.max_tokens == 8000
     assert request.response_format["type"] == "json_schema"
     assert request.response_format["json_schema"]["strict"] is True
+    assert (
+        request.response_format["json_schema"]["name"]
+        == "returned_message_topics_analysis_v2"
+    )
     payload = json.loads(request.messages[1].content)
     assert payload["messages"] == [
         {
@@ -98,53 +117,84 @@ def test_analyze_message_calls_llm_once_with_strict_structured_output():
             "sequence": 1,
         },
     ]
-    assert result["analysis_result"].topics[0].priority == "UNKNOWN"
+    assert result["analysis_result"].topics[0].topic == "배포 일정"
+    assert result["analysis_result"].message_assessments[0].priority == "NORMAL"
 
 
 def test_analyze_message_rejects_unknown_source_reference():
     response = valid_analysis()
     response["topics"][0]["source_message_refs"] = ["message-1", "unknown"]
     llm_client = FakeLlmClient(response)
-    with pytest.raises(ValueError, match="unknown source_message_refs"):
+    with pytest.raises(ValueError, match="contains unknown message references"):
         asyncio.run(create_analyze_message_node(llm_client)(make_state()))
 
 
 def test_analyze_message_rejects_missing_source_reference():
     response = valid_analysis()
     response["topics"][0]["source_message_refs"] = ["message-1"]
-    response["topics"][0]["message_count"] = 1
     llm_client = FakeLlmClient(response)
-    with pytest.raises(ValueError, match="missing source_message_refs"):
+    with pytest.raises(ValueError, match="is missing message references"):
         asyncio.run(create_analyze_message_node(llm_client)(make_state()))
 
 
-def test_topic_rejects_reason_longer_than_50_characters():
+def test_analyze_message_rejects_duplicate_topic_reference():
+    response = valid_analysis()
+    response["topics"].append(
+        {
+            "topic": "다른 토픽",
+            "summary": "중복 검증을 위한 토픽입니다.",
+            "source_message_refs": ["message-1"],
+        }
+    )
+    llm_client = FakeLlmClient(response)
+    with pytest.raises(ValueError, match="contains duplicate message references"):
+        asyncio.run(create_analyze_message_node(llm_client)(make_state()))
+
+
+def test_analyze_message_rejects_unknown_assessment_reference():
+    response = valid_analysis()
+    response["message_assessments"][1]["message_ref"] = "unknown"
+    llm_client = FakeLlmClient(response)
+    with pytest.raises(ValueError, match="contains unknown message references"):
+        asyncio.run(create_analyze_message_node(llm_client)(make_state()))
+
+
+def test_analyze_message_rejects_missing_assessment_reference():
+    response = valid_analysis()
+    response["message_assessments"] = response["message_assessments"][:1]
+    llm_client = FakeLlmClient(response)
+    with pytest.raises(ValueError, match="is missing message references"):
+        asyncio.run(create_analyze_message_node(llm_client)(make_state()))
+
+
+def test_analyze_message_rejects_duplicate_assessment_reference():
+    response = valid_analysis()
+    response["message_assessments"][1]["message_ref"] = "message-1"
+    llm_client = FakeLlmClient(response)
+    with pytest.raises(ValueError, match="contains duplicate message references"):
+        asyncio.run(create_analyze_message_node(llm_client)(make_state()))
+
+
+def test_assessment_rejects_reason_longer_than_50_characters():
     with pytest.raises(ValidationError):
-        ReturnedMessageTopic(
-            topic="배포 일정",
-            summary="배포 일정 확인이 필요합니다.",
+        ReturnedMessageAssessment(
+            message_ref="message-1",
             priority="UNKNOWN",
             priority_reason="가" * 51,
             reply_required=False,
             reply_reason="답변 요청이 없습니다.",
             action_required=True,
             action_reason="일정 확인이 필요합니다.",
-            message_count=1,
-            source_message_refs=["message-1"],
         )
 
 
-def test_topic_requires_message_count_to_match_source_references():
-    with pytest.raises(ValidationError, match="message_count must match"):
+def test_topic_rejects_duplicate_source_references():
+    with pytest.raises(
+        ValidationError,
+        match="source_message_refs values must be unique",
+    ):
         ReturnedMessageTopic(
             topic="배포 일정",
             summary="배포 일정 확인이 필요합니다.",
-            priority="NORMAL",
-            priority_reason="일반적인 일정 확인 요청입니다.",
-            reply_required=False,
-            reply_reason="답변 요청이 없습니다.",
-            action_required=True,
-            action_reason="일정 확인이 필요합니다.",
-            message_count=2,
-            source_message_refs=["message-1"],
+            source_message_refs=["message-1", "message-1"],
         )

@@ -1,40 +1,41 @@
-from time import monotonic
+from fastapi import APIRouter, Header, HTTPException, Response, status
 
-from fastapi import APIRouter
-
-from app.features.ai_task.ai_task_executor import AiTaskExecutor
-from app.features.ai_task.ai_task_handler import AiTaskHandler
+from app.features.returned_message_topics.mariadb_execution_repository import (
+    ExecutionConflictError,
+)
+from app.features.returned_message_topics.execution_service import (
+    ReturnedMessageTopicsExecutionService,
+)
 from app.features.returned_message_topics.returned_message_topics_schemas import (
-    ReturnedMessageTopicsInput,
+    ReturnedMessageTopicsExecutionResponse,
     ReturnedMessageTopicsRequest,
-    ReturnedMessageTopicsResult,
-    ReturnedMessageTopicsSuccessResponse,
 )
-from app.features.returned_message_topics.trace import (
-    trace_development,
-    trace_exception,
-    trace_info,
-)
+from app.features.returned_message_topics.trace import trace_info
 
 
 def create_returned_message_topics_router(
-    handler: AiTaskHandler[ReturnedMessageTopicsInput, ReturnedMessageTopicsResult],
+    execution_service: ReturnedMessageTopicsExecutionService,
 ) -> APIRouter:
     router = APIRouter(
         prefix="/returned-message-topics",
         tags=["returned-message-topics"],
     )
-    # 공통 실행기 AiTaskExecutor의 인스턴스를 생성, 처리할 타입을 지정
-    executor = AiTaskExecutor[ReturnedMessageTopicsInput, ReturnedMessageTopicsResult]()
 
     @router.post(
         "/generate",
-        response_model=ReturnedMessageTopicsSuccessResponse,
+        response_model=ReturnedMessageTopicsExecutionResponse,
+        status_code=status.HTTP_202_ACCEPTED,
     )
     async def generate_returned_message_topics(
         request: ReturnedMessageTopicsRequest,
-    ) -> ReturnedMessageTopicsSuccessResponse:
-        started_at = monotonic()
+        response: Response,
+        x_tenant_id: str = Header(alias="X-Tenant-Id"),
+    ) -> ReturnedMessageTopicsExecutionResponse:
+        if x_tenant_id != request.tenant_id:
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail="tenant scope does not match request",
+            )
         trace_info(
             "request_received",
             execution_id=request.execution_id,
@@ -42,39 +43,41 @@ def create_returned_message_topics_router(
             selected_item_count=len(request.input.selected_items),
             tenant_id=request.tenant_id,
         )
-
-        # HTTP 요청이 들어왔을 때
         try:
-            response = await executor.execute(
-                request=request,
-                handler=handler,
-            )
-            success_response = ReturnedMessageTopicsSuccessResponse.model_validate(
-                response.model_dump()
-            )
-        except Exception as exc:
-            trace_exception(
-                "request_failed",
-                elapsed_ms=int((monotonic() - started_at) * 1000),
-                error_type=type(exc).__name__,
-                execution_id=request.execution_id,
-                request_id=request.input.request_id,
-            )
-            raise
+            execution = execution_service.accept(request)
+        except ExecutionConflictError as exception:
+            raise HTTPException(
+                status_code=status.HTTP_409_CONFLICT,
+                detail="execution_id request fingerprint does not match",
+            ) from exception
 
+        response.status_code = (
+            status.HTTP_202_ACCEPTED
+            if execution.status in {"ACCEPTED", "RUNNING"}
+            else status.HTTP_200_OK
+        )
         trace_info(
-            "request_completed",
-            elapsed_ms=int((monotonic() - started_at) * 1000),
+            "request_accepted",
             execution_id=request.execution_id,
             request_id=request.input.request_id,
-            topic_count=len(success_response.result.topics),
+            status=execution.status,
         )
-        trace_development(
-            "http_response_payload",
-            execution_id=request.execution_id,
-            request_id=request.input.request_id,
-            response=success_response.model_dump(mode="json"),
-        )
-        return success_response
+        return execution
+
+    @router.get(
+        "/executions/{execution_id}",
+        response_model=ReturnedMessageTopicsExecutionResponse,
+    )
+    async def get_returned_message_topics_execution(
+        execution_id: str,
+        x_tenant_id: str = Header(alias="X-Tenant-Id"),
+    ) -> ReturnedMessageTopicsExecutionResponse:
+        execution = execution_service.find(x_tenant_id, execution_id)
+        if execution is None:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail="execution was not found",
+            )
+        return execution
 
     return router
