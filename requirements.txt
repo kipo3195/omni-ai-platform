@@ -29,6 +29,7 @@ pydantic==2.13.4
 pydantic_core==2.46.4
 Pygments==2.21.0
 pytest==9.1.1
+PyMySQL==1.1.2
 PyYAML==6.0.3
 requests==2.34.2
 requests-toolbelt==1.0.0
