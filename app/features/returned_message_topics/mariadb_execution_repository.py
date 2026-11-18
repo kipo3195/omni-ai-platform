@@ -17,6 +17,8 @@ from app.features.returned_message_topics.returned_message_topics_schemas import
 
 TASK_TYPE = "RETURNED_MESSAGE_TOPICS"
 CONTRACT_VERSION = 2
+RECOVERY_NONE = "NONE"
+RECOVERY_LEASE_EXPIRED = "LEASE_EXPIRED"
 
 
 class ExecutionConflictError(RuntimeError):
@@ -31,6 +33,8 @@ class ExecutionRecord:
     request_payload: str
     request_fingerprint: str
     status: str
+    recovery_status: str
+    recovery_detected_at: float | None
     result_payload: str | None
     error_payload: str | None
 
@@ -155,22 +159,43 @@ class MariaDbReturnedMessageTopicsExecutionRepository:
         with self._connection() as connection, connection.cursor() as cursor:
             return self._find_with_cursor(cursor, tenant_id, execution_id)
 
-    def find_recoverable(self) -> list[tuple[str, str]]:
-        now = time.time()
+    def find_accepted_for_recovery(self) -> list[tuple[str, str]]:
         with self._connection() as connection, connection.cursor() as cursor:
             cursor.execute(
                 f"""
                 SELECT tenant_id, execution_id
                 FROM {self._execution_table}
                 WHERE status = 'ACCEPTED'
-                   OR (status = 'RUNNING'
-                       AND (lease_until IS NULL OR lease_until <= %s))
                 ORDER BY created_at, tenant_id, execution_id
-                """,
-                (now,),
+                """
             )
             rows = cursor.fetchall()
         return [(row["tenant_id"], row["execution_id"]) for row in rows]
+
+    def mark_expired_running(self) -> int:
+        now = time.time()
+        with self._connection() as connection, connection.cursor() as cursor:
+            cursor.execute(
+                f"""
+                UPDATE {self._execution_table}
+                SET recovery_status = %s,
+                    recovery_detected_at = COALESCE(recovery_detected_at, %s),
+                    updated_at = %s
+                WHERE status = 'RUNNING'
+                  AND recovery_status = %s
+                  AND (lease_until IS NULL OR lease_until <= %s)
+                """,
+                (
+                    RECOVERY_LEASE_EXPIRED,
+                    now,
+                    now,
+                    RECOVERY_NONE,
+                    now,
+                ),
+            )
+            marked = cursor.rowcount
+            connection.commit()
+            return marked
 
     def claim_execution(
         self,
@@ -191,9 +216,7 @@ class MariaDbReturnedMessageTopicsExecutionRepository:
                     updated_at = %s
                 WHERE tenant_id = %s
                   AND execution_id = %s
-                  AND (status = 'ACCEPTED'
-                    OR (status = 'RUNNING'
-                        AND (lease_until IS NULL OR lease_until <= %s)))
+                  AND status = 'ACCEPTED'
                 """,
                 (
                     now,
@@ -202,7 +225,6 @@ class MariaDbReturnedMessageTopicsExecutionRepository:
                     now,
                     tenant_id,
                     execution_id,
-                    now,
                 ),
             )
             claimed = cursor.rowcount == 1
@@ -390,6 +412,8 @@ class MariaDbReturnedMessageTopicsExecutionRepository:
                     f"""
                     UPDATE {self._execution_table}
                     SET status = %s,
+                        recovery_status = %s,
+                        recovery_detected_at = NULL,
                         result_payload = %s,
                         error_payload = %s,
                         worker_owner = NULL,
@@ -403,6 +427,7 @@ class MariaDbReturnedMessageTopicsExecutionRepository:
                     """,
                     (
                         status,
+                        RECOVERY_NONE,
                         result_payload,
                         error_payload,
                         now,
@@ -457,7 +482,8 @@ class MariaDbReturnedMessageTopicsExecutionRepository:
         cursor.execute(
             f"""
             SELECT tenant_id, execution_id, request_id, request_payload,
-                   request_fingerprint, status, result_payload, error_payload
+                   request_fingerprint, status, recovery_status,
+                   recovery_detected_at, result_payload, error_payload
             FROM {self._execution_table}
             WHERE tenant_id = %s AND execution_id = %s{lock_clause}
             """,
@@ -473,6 +499,8 @@ class MariaDbReturnedMessageTopicsExecutionRepository:
             request_payload=row["request_payload"],
             request_fingerprint=row["request_fingerprint"],
             status=row["status"],
+            recovery_status=row["recovery_status"],
+            recovery_detected_at=row["recovery_detected_at"],
             result_payload=row["result_payload"],
             error_payload=row["error_payload"],
         )
@@ -510,6 +538,8 @@ class MariaDbReturnedMessageTopicsExecutionRepository:
                 request_payload LONGTEXT NOT NULL,
                 request_fingerprint CHAR(64) NOT NULL,
                 status VARCHAR(32) NOT NULL,
+                recovery_status VARCHAR(32) NOT NULL DEFAULT 'NONE',
+                recovery_detected_at DOUBLE NULL,
                 result_payload LONGTEXT NULL,
                 error_payload LONGTEXT NULL,
                 worker_owner VARCHAR(64) NULL,
@@ -556,6 +586,20 @@ class MariaDbReturnedMessageTopicsExecutionRepository:
         with self._connection() as connection, connection.cursor() as cursor:
             for statement in statements:
                 cursor.execute(statement)
+            cursor.execute(
+                f"""
+                ALTER TABLE {self._execution_table}
+                ADD COLUMN IF NOT EXISTS recovery_status
+                    VARCHAR(32) NOT NULL DEFAULT 'NONE' AFTER status
+                """
+            )
+            cursor.execute(
+                f"""
+                ALTER TABLE {self._execution_table}
+                ADD COLUMN IF NOT EXISTS recovery_detected_at
+                    DOUBLE NULL AFTER recovery_status
+                """
+            )
             connection.commit()
 
 

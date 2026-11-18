@@ -42,7 +42,7 @@ class ReturnedMessageTopicsExecutionService:
             ReturnedMessageTopicsResult,
         ],
         worker_count: int = 2,
-        execution_lease_seconds: float = 900.0,
+        execution_lease_seconds: float = 300.0,
         recovery_poll_interval_seconds: float = 5.0,
         callback_base_url: str = "",
         callback_timeout_seconds: float = 5.0,
@@ -119,7 +119,7 @@ class ReturnedMessageTopicsExecutionService:
         if not self._started:
             self.start()
         record, created = self._repository.accept(request)
-        if created or record.status in {"ACCEPTED", "RUNNING"}:
+        if created or record.status == "ACCEPTED":
             self._enqueue(record.tenant_id, record.execution_id)
         return self._to_response(record)
 
@@ -162,7 +162,16 @@ class ReturnedMessageTopicsExecutionService:
     def _recovery_worker(self) -> None:
         while not self._stop.is_set():
             try:
-                for tenant_id, execution_id in self._repository.find_recoverable():
+                marked = self._repository.mark_expired_running()
+                if marked:
+                    logger.warning(
+                        "Marked expired Returned Message Topics executions "
+                        "for recovery isolation. count=%s",
+                        marked,
+                    )
+                for tenant_id, execution_id in (
+                    self._repository.find_accepted_for_recovery()
+                ):
                     self._enqueue(tenant_id, execution_id)
             except Exception:
                 logger.exception(
@@ -177,7 +186,7 @@ class ReturnedMessageTopicsExecutionService:
         owner: str,
     ) -> None:
         record = self._repository.find(tenant_id, execution_id)
-        if record is None or record.status not in {"ACCEPTED", "RUNNING"}:
+        if record is None or record.status != "ACCEPTED":
             return
         if not self._repository.claim_execution(
             tenant_id,

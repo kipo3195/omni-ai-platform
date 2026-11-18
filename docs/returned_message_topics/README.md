@@ -10,7 +10,7 @@
 - [Execution Lifecycle](execution-lifecycle.md): durable execution repository, Queue와 Worker lifecycle
 - [Callback Delivery](callback-delivery.md): callback outbox, 재전송과 Orchestrator polling의 관계
 
-현재 구현은 `POST /generate` 요청 안에서 LLM 완료를 기다리고 `200 SUCCEEDED`를 반환하는 동기형이다. 목표 계약은 execution을 durable하게 접수한 뒤 `202 Accepted`를 반환하고 Queue Worker, callback과 status query로 완료를 전달하는 비동기형이다. 아래 input/result v2 schema는 현재와 목표 계약에서 동일하게 사용한다.
+현재 baseline은 execution을 MariaDB에 durable하게 접수한 뒤 `202 Accepted`를 반환하고, in-process Queue Worker, callback과 status query로 완료를 전달하는 비동기형이다. Process-local Queue 등록이 유실되면 recovery worker가 저장된 `ACCEPTED` execution을 다시 등록한다. 아래 input/result v2 schema는 start, callback과 status query에서 동일하게 사용한다.
 
 ## 변경 요약
 
@@ -30,7 +30,7 @@ POST /ai/v1/returned-message-topics/generate
 Content-Type: application/json
 ```
 
-현재 구현은 이 endpoint에서 terminal result를 동기 반환한다. 목표 비동기 응답과 중복 start 규칙은 [Asynchronous API Contract](api-contract.md)를 따른다.
+현재 구현은 이 endpoint에서 execution 접수 결과를 `202 Accepted`로 반환한다. Terminal result는 callback 또는 status query로 전달하며 중복 start 규칙은 [Asynchronous API Contract](api-contract.md)를 따른다.
 
 ## Request
 
@@ -90,7 +90,7 @@ Content-Type: application/json
 
 ## Terminal Success Result
 
-다음은 `SUCCEEDED` terminal envelope다. 현재 동기 구현에서는 HTTP 200 start response로 반환하고, 목표 비동기 구현에서는 callback과 GET execution status response에서 동일한 result를 사용한다.
+다음은 `SUCCEEDED` terminal envelope다. Callback과 GET execution status response는 동일한 result 구조를 사용한다. 같은 immutable request의 duplicate start가 이미 terminal인 execution을 조회하면 HTTP 200 응답에도 이 envelope를 사용한다.
 
 ```json
 {
@@ -182,6 +182,24 @@ Content-Type: application/json
 | `message_assessments[].action_reason` | string | Y | 1~50자 |
 | `result.generated_at` | RFC 3339 datetime | Y | 서버가 생성한 UTC 시각 |
 
+### 메시지 판단 기준
+
+`priority`, `reply_required`, `action_required`는 서로 독립적으로 판단합니다.
+
+- `priority`: 메시지의 긴급도와 중요도
+- `reply_required`: 명시적인 답변, 회신 또는 정보 전달 요청 여부
+- `action_required`: 확인, 검토, 수정, 보완, 참석 등 명시적인 작업 요청 여부
+
+| 제목 의미 | `priority` 예시 | `reply_required` | `action_required` |
+| --- | --- | --- | --- |
+| 일반 공지 | `NORMAL` | `false` | `false` |
+| 긴급 공지 | `URGENT` | `false` | `false` |
+| 확인 요청 | `NORMAL` | `false` | `true` |
+| 회신 요청 | `NORMAL` | `true` | `false` |
+| 검토 후 회신 요청 | `NORMAL` | `true` | `true` |
+
+긴급하거나 중요한 메시지라도 회신 요청이 없다면 `reply_required`는 `false`입니다.
+
 ## 응답 불변조건
 
 Orchestrator는 배열 순서 대신 메시지 참조 키를 기준으로 결과를 연결해야 합니다.
@@ -198,7 +216,7 @@ Orchestrator는 배열 순서 대신 메시지 참조 키를 기준으로 결과
 ## Orchestrator 처리 권장 순서
 
 1. 요청 시 `contract_version`을 `2`로 전송합니다.
-2. 목표 비동기 계약에서는 HTTP 202와 `status == ACCEPTED`를 접수로 기록합니다.
+2. HTTP 202와 `status == ACCEPTED`를 접수로 기록합니다.
 3. Callback 또는 status query의 terminal 응답에서 `status == SUCCEEDED`를 확인합니다.
 4. 응답의 `execution_id`, `task_type`, `contract_version`이 요청과 일치하는지
    확인합니다.
@@ -208,7 +226,7 @@ Orchestrator는 배열 순서 대신 메시지 참조 키를 기준으로 결과
 
 ## Execution Delivery Contract
 
-목표 계약은 다음 세 경로를 사용한다.
+현재 비동기 계약은 다음 세 경로를 사용한다.
 
 ```text
 POST /ai/v1/returned-message-topics/generate
@@ -223,21 +241,15 @@ GET /ai/v1/returned-message-topics/executions/{executionId}
 
 Callback과 polling은 같은 terminal envelope를 사용하고 Orchestrator의 같은 result handler로 수렴한다. Callback outbox는 발신 측 유실을 복구하고 polling은 수신 측에서 callback 장기 지연을 복구한다.
 
-현재 구현에는 `202 Accepted`, durable execution Queue, callback과 GET execution endpoint가 없다. 따라서 비동기 계약이 구현되기 전에는 다음 내용을 보장하지 않는다.
+현재 baseline은 `202 Accepted`, execution ID 기반 start 멱등성, GET status query, callback outbox와 callback retry를 구현한다. 실행 Queue는 process-local이지만 MariaDB execution record와 recovery scan으로 Queue 등록 유실을 복구한다. Lease가 만료된 `RUNNING`은 중복 LLM 호출을 피하기 위해 자동 재실행하지 않고 내부 `LEASE_EXPIRED` recovery 상태로 격리한다.
 
-- Start가 빠르게 `202 Accepted`를 반환함
-- 동일 execution ID의 start가 LLM을 중복 실행하지 않음
-- GET 조회의 `SUCCEEDED.result`가 contract version 2 구조임
-- `ACCEPTED`, `RUNNING`, `FAILED`, `CANCELLED` 조회 envelope
-- Callback outbox와 callback retry
-
-구현 목표와 HTTP schema는 [Asynchronous API Contract](api-contract.md)를 따른다.
+HTTP schema와 세부 보장은 [Asynchronous API Contract](api-contract.md)를 따른다.
 
 ## Non-2xx 및 불확실 상태 복구 규칙
 
 HTTP 응답을 받지 못했거나 5xx를 받았다는 사실만으로 AI 작업이
 실패했다고 확정할 수 없습니다. 서버가 작업을 접수한 뒤 응답 전송에
-실패했을 수 있기 때문입니다. 따라서 Orchestrator의 목표 복구 전략인
+실패했을 수 있기 때문입니다. 따라서 Orchestrator의 복구 전략인
 `PROCESSING` 유지 후 재조회를 계속 사용하는 것이 의도에 맞습니다.
 
 | 결과 | Orchestrator 처리 |
@@ -251,17 +263,18 @@ HTTP 응답을 받지 못했거나 5xx를 받았다는 사실만으로 AI 작업
 | GET 200 + terminal `FAILED`/`CANCELLED` | envelope에 따라 terminal 상태로 종료 |
 | callback 또는 GET 200 + `SUCCEEDED` | v2 `result`를 멱등 저장하고 delivery 단계로 전이 |
 
-이 전략을 운영 계약으로 사용하려면 다음이 함께 구현되어야 합니다.
+Omni AI Server baseline은 다음 서버 측 구성을 구현합니다.
 
 1. `executionId`별 내구성 있는 execution 상태·결과 저장
-2. execution record와 durable Queue 등록 후 `202 Accepted`
+2. execution record의 durable commit, 즉시 Queue 등록과 `ACCEPTED` recovery 후 `202 Accepted`
 3. `GET /ai/v1/returned-message-topics/executions/{executionId}`
 4. terminal result와 callback outbox의 atomic 저장 및 재전송
 5. `ACCEPTED`, `RUNNING`, `SUCCEEDED`, `FAILED`, `CANCELLED` envelope 스키마
 6. `SUCCEEDED.result`는 이 문서의 contract version 2 result와 동일하다는 보장
-7. 404 visibility grace period, polling backoff, 최종 복구 deadline
 
-Execution ID 기반 멱등성이 구현되기 전에는 POST를 자동 재시도하면 안 된다. Status query의 단일 404도 즉시 POST 재호출로 연결하지 않는다.
+404 visibility grace period, polling backoff와 최종 복구 deadline은 AI Orchestrator가 이 계약으로 전환하면서 구현해야 하는 reconciliation 책임입니다.
+
+POST transport retry는 최초 요청과 동일한 execution ID와 immutable request를 사용한다. Status query의 단일 404도 새 execution ID 생성이나 변경된 요청의 POST 호출로 연결하지 않는다.
 
 ## Java 수신 DTO 예시
 

@@ -5,6 +5,8 @@ CREATE TABLE IF NOT EXISTS returned_message_topics_execution (
     request_payload LONGTEXT NOT NULL,
     request_fingerprint CHAR(64) NOT NULL,
     status VARCHAR(32) NOT NULL,
+    recovery_status VARCHAR(32) NOT NULL DEFAULT 'NONE',
+    recovery_detected_at DOUBLE NULL,
     result_payload LONGTEXT NULL,
     error_payload LONGTEXT NULL,
     worker_owner VARCHAR(64) NULL,
@@ -17,6 +19,12 @@ CREATE TABLE IF NOT EXISTS returned_message_topics_execution (
     PRIMARY KEY (tenant_id, execution_id),
     KEY idx_rmt_execution_status (status, lease_until, updated_at)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
+ALTER TABLE returned_message_topics_execution
+    ADD COLUMN IF NOT EXISTS recovery_status
+        VARCHAR(32) NOT NULL DEFAULT 'NONE' AFTER status,
+    ADD COLUMN IF NOT EXISTS recovery_detected_at
+        DOUBLE NULL AFTER recovery_status;
 
 CREATE TABLE IF NOT EXISTS returned_message_topics_callback_outbox (
     event_id CHAR(36) NOT NULL,

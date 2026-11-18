@@ -26,7 +26,7 @@ Request body는 README의 v2 request schema를 사용한다.
 
 ### First acceptance
 
-Omni AI Server는 execution record와 durable execution queue 등록을 완료한 뒤 응답한다.
+Omni AI Server는 execution record를 MariaDB에 commit하고 process-local Queue 등록을 요청한 뒤 응답한다. Queue 등록 전후의 process 종료는 저장된 `ACCEPTED` execution을 조회하는 recovery worker가 복구한다.
 
 ```http
 HTTP/1.1 202 Accepted
@@ -41,7 +41,7 @@ HTTP/1.1 202 Accepted
 }
 ```
 
-Execution record 또는 queue 등록을 내구성 있게 완료하지 못하면 202를 반환하지 않는다.
+Execution record를 내구성 있게 commit하지 못하면 202를 반환하지 않는다. Queue 자체의 내구성은 주장하지 않으며 execution repository와 recovery scan이 실행 가능성을 보장한다.
 
 ### Duplicate start
 
@@ -54,7 +54,7 @@ Start는 `tenant_id + execution_id`에 대해 멱등하다. Omni AI Server는 �
 | terminal | 예 | 새 LLM 실행 없이 저장된 terminal envelope |
 | 어떤 상태든 | 아니오 | `409 Conflict` |
 
-Duplicate start의 HTTP status는 non-terminal이면 202, terminal이면 200을 사용한다. 어떤 경우에도 같은 execution ID로 두 번째 LLM 실행을 만들지 않는다.
+Duplicate start의 HTTP status는 non-terminal이면 202, terminal이면 200을 사용한다. Duplicate start 자체는 같은 execution ID의 두 번째 LLM 실행을 만들지 않는다. Lease가 만료된 `RUNNING`도 자동 재실행하지 않고 내부 recovery 상태로 격리한다.
 
 Fingerprint에는 최소한 다음 immutable field가 포함된다.
 
@@ -236,4 +236,4 @@ callback 중복      → 기존 terminal state 유지
 
 ## Remaining implementation gaps
 
-현재 baseline은 MariaDB repository, lease 기반 in-process worker와 callback outbox로 위 계약을 구현한다. 운영 배포 전에는 service-to-service 인증, lease heartbeat 또는 broker 기반 실행 queue, retention/cleanup 정책과 dead-letter 운영 도구를 추가해야 한다.
+현재 baseline은 MariaDB repository, lease 기반 in-process worker와 callback outbox로 위 계약을 구현한다. Recovery worker는 누락된 `ACCEPTED` 실행만 Queue에 다시 넣고, lease가 만료된 `RUNNING`은 내부 `LEASE_EXPIRED` recovery 상태로 격리해 중복 LLM 호출을 막는다. 운영 배포 전에는 service-to-service 인증, lease heartbeat 또는 broker 기반 실행 queue, retention/cleanup 정책과 dead-letter 운영 도구를 추가해야 한다.

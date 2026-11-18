@@ -12,6 +12,8 @@ from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
 from app.features.returned_message_topics.mariadb_execution_repository import (
+    RECOVERY_LEASE_EXPIRED,
+    RECOVERY_NONE,
     MariaDbReturnedMessageTopicsExecutionRepository,
 )
 from app.features.returned_message_topics.execution_service import (
@@ -378,6 +380,83 @@ def test_accepted_execution_is_recovered_from_persistent_store(
         service.close()
 
     assert handler.calls == 1
+
+
+def test_expired_running_execution_is_isolated_without_reexecution(
+    repository_factory,
+):
+    repository = repository_factory()
+    request = ReturnedMessageTopicsRequest.model_validate(VALID_REQUEST)
+    repository.accept(request)
+    assert repository.claim_execution(
+        "tenant-1",
+        "execution-1",
+        "worker-1",
+        lease_seconds=0.01,
+    ) is True
+    sleep(0.02)
+
+    handler = FakeReturnedMessageTopicsHandler()
+    service = ReturnedMessageTopicsExecutionService(
+        repository=repository_factory(),
+        handler=handler,
+        worker_count=1,
+        execution_lease_seconds=1.0,
+        recovery_poll_interval_seconds=0.01,
+    )
+    service.start()
+    try:
+        deadline = monotonic() + 2.0
+        while monotonic() < deadline:
+            record = repository.find("tenant-1", "execution-1")
+            if record is not None and (
+                record.recovery_status == RECOVERY_LEASE_EXPIRED
+            ):
+                break
+            sleep(0.01)
+        else:
+            raise AssertionError("expired running execution was not isolated")
+
+        sleep(0.05)
+        record = repository.find("tenant-1", "execution-1")
+        assert record is not None
+        assert record.status == "RUNNING"
+        assert record.recovery_status == RECOVERY_LEASE_EXPIRED
+        assert record.recovery_detected_at is not None
+        assert handler.calls == 0
+        assert repository.claim_execution(
+            "tenant-1",
+            "execution-1",
+            "worker-2",
+            lease_seconds=1.0,
+        ) is False
+    finally:
+        service.close()
+
+    assert repository.complete_failure(
+        tenant_id="tenant-1",
+        execution_id="execution-1",
+        owner="worker-1",
+        error_payload={
+            "code": "AI_GENERATION_FAILED",
+            "message": "generation failed",
+            "retryable": False,
+        },
+        callback_payload={
+            "tenantId": "tenant-1",
+            "userId": "user-1",
+            "executionId": "execution-1",
+            "taskType": "RETURNED_MESSAGE_TOPICS",
+            "contractVersion": 2,
+            "status": "FAILED",
+            "failureReason": "AI_GENERATION_FAILED",
+        },
+    ) is True
+    completed = repository.find("tenant-1", "execution-1")
+    assert completed is not None
+    assert completed.status == "FAILED"
+    assert completed.recovery_status == RECOVERY_NONE
+    assert completed.recovery_detected_at is None
 
 
 def test_callback_outbox_retries_same_event_until_accepted(repository_factory):
